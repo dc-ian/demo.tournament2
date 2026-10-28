@@ -7,7 +7,7 @@ const sh=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.r
 const TT=/^(?:https?:\/\/)?(?:www\.|m\.)?(?:tiktok\.com\/)?@([\w.]{1,24})(?:[\/?#].*)?$/i;
 const tt=s=>{const m=TT.exec(String(s).trim());return m?"@"+m[1]:s};
 const ttUser=n=>/^@[\w.]{1,24}$/.test(n)?n.slice(1):"";
-const pic=n=>ttUser(n)?`<img class="pfp" src="https://unavatar.io/tiktok/${esc(ttUser(n))}" alt="" loading="lazy" referrerpolicy="no-referrer">`:"";
+const pic=n=>ttUser(n)?`<img class="pfp" src="/api/avatar?u=${encodeURIComponent(ttUser(n))}" alt="" loading="lazy" referrerpolicy="no-referrer">`:"";
 const dn=n=>String(n).replace(/^@/,""); // names are stored with their @ (needed for the TikTok photo and link) but shown without it
 // A TikTok player's name as a tappable link to their profile (plain text for everyone else)
 const plink=n=>ttUser(n)?`<a href="https://www.tiktok.com/@${esc(ttUser(n))}" target="_blank" rel="noopener noreferrer">${esc(dn(n))}</a>`:esc(dn(n));
@@ -531,10 +531,10 @@ document.addEventListener("click",e=>{if(cm&&!cm.contains(e.target))closeCm()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeCm()});
 window.addEventListener("scroll",closeCm,true);window.addEventListener("resize",closeCm);
 
-// Hide a missing logo instead of showing a broken image.
-app.addEventListener("error",e=>{if(e.target.tagName==="IMG")e.target.hidden=true},true);
+// Hide a missing logo instead of showing a broken image. Player photos (.pfp) are skipped: the retry/fallback handler below owns them.
+app.addEventListener("error",e=>{if(e.target.tagName==="IMG"&&!e.target.classList.contains("pfp"))e.target.hidden=true},true);
 window.addEventListener("hashchange",()=>{err=note="";nav=true;render()});render();
 // Load the shared data now, then check for changes every 15 seconds while the tab is visible.
 load();setInterval(()=>{if(!document.hidden)load()},15000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)load()});
-document.addEventListener("error",e=>{const t=e.target;if(t&&t.classList&&t.classList.contains("pfp")){const n=+t.dataset.r||0;if(n<3){t.dataset.s=t.dataset.s||t.src;t.dataset.r=n+1;setTimeout(()=>{if(t.isConnected)t.src=t.dataset.s+"?r="+(n+1)},2000*(n+1)+Math.random()*3000);return}if(t.classList.contains("champ-img")||t.classList.contains("mcimg")){const d=document.createElement("div");d.className=t.classList.contains("mcimg")?"mca":"champ-av";d.textContent=t.dataset.i;t.replaceWith(d)}else t.remove()}},true);
+document.addEventListener("error",e=>{const t=e.target;if(t&&t.classList&&t.classList.contains("pfp")){const n=+t.dataset.r||0;if(n<3){t.dataset.s=t.dataset.s||t.src;t.dataset.r=n+1;setTimeout(()=>{if(t.isConnected)t.src=t.dataset.s+(t.dataset.s.includes("?")?"&":"?")+"r="+(n+1)},2000*(n+1)+Math.random()*3000);return}if(t.classList.contains("champ-img")||t.classList.contains("mcimg")){const d=document.createElement("div");d.className=t.classList.contains("mcimg")?"mca":"champ-av";d.textContent=t.dataset.i;t.replaceWith(d)}else t.remove()}},true);
