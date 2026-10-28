@@ -1,5 +1,5 @@
 // HeyHoney Tournaments: up to 5 at once. Team brackets (1v1 to 16v16) or free for all.
-const KEY="hh8",OLD="cott7",MAX=5,app=document.getElementById("app");
+const KEY="hh9",OLD=["hh8","cott7"],MAX=5,API="/api/data",app=document.getElementById("app");
 const v=id=>document.getElementById(id).value;
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sh=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
@@ -22,8 +22,6 @@ const uid=()=>Math.random().toString(36).slice(2,8);
 function clean(raw){
   const o={T:[]};
   if(!raw||typeof raw!=="object")return o;
-  if(typeof raw.hash==="string"&&typeof raw.salt==="string"){o.hash=raw.hash;o.salt=raw.salt}
-  else if(typeof raw.pass==="string"&&raw.pass)o.pass=raw.pass; // legacy plaintext, upgraded on next login
   (Array.isArray(raw.T)?raw.T:[]).slice(0,MAX).forEach(x=>{
     if(!x||typeof x!=="object"||!/^\w{1,16}$/.test(x.id)||o.T.some(y=>y.id===String(x.id)))return;
     const t={id:String(x.id),name:str(x.name,60)||"Untitled"};
@@ -46,16 +44,43 @@ function clean(raw){
     t.rt={};if(t.sc)Object.entries(x.rt||{}).forEach(([k,s])=>{if(/^\d+$/.test(k)&&+k<t.sc.length&&typeof s==="string"&&/^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(s))t.rt[k]=s.slice(0,16)});
     o.T.push(t)});
   return o}
-let S={T:[]};
-try{const r=localStorage.getItem(KEY)||localStorage.getItem(OLD);if(r)S=clean(JSON.parse(r))}catch(e){}
-const SESSION_MS=8*36e5;let fails=0,lockUntil=0,nav=false;
-let authed=false;try{authed=+sessionStorage.getItem("hhAuth")>Date.now()}catch(e){}
+// Tournaments live in a shared database behind /api/data (Upstash Redis), so every device sees the same data.
+// localStorage only keeps a copy of the last data loaded, so the page can paint instantly.
+let S={T:[]},rev=0,need=false,ready=false,offline=false,busy=false,dirty=false,reload=false,tok="";
+const cache=()=>{try{localStorage.setItem(KEY,JSON.stringify({T:S.T,rev}))}catch(e){}};
+try{const r=JSON.parse(localStorage.getItem(KEY)||"null");if(r){S=clean(r);rev=+r.rev||0}}catch(e){}
+// Tournaments saved by older versions of this app in this browser. Moved to the shared database at the first admin login if it is still empty.
+let legacy=[];try{for(const k of OLD){const r=localStorage.getItem(k);if(r){legacy=clean(JSON.parse(r)).T;if(legacy.length)break}}}catch(e){}
+const SESSION_MS=8*36e5;let nav=false;
+let authed=false;try{tok=sessionStorage.getItem("hhTok")||"";authed=!!tok&&+sessionStorage.getItem("hhAuth")>Date.now()}catch(e){}
 let err="",note="",showForm=false;
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){err="Changes could not be saved in this browser (storage is full or blocked)."}};
-const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
-async function hashPass(p,salt){const k=await crypto.subtle.importKey("raw",new TextEncoder().encode(p),"PBKDF2",false,["deriveBits"]);
-  return hex(await crypto.subtle.deriveBits({name:"PBKDF2",salt:new TextEncoder().encode(salt),iterations:150000,hash:"SHA-256"},k,256))}
-async function setPass(p){S.salt=uid()+uid()+uid();S.hash=await hashPass(p,S.salt);delete S.pass;save()}
+async function api(body){
+  const h={};if(body)h["Content-Type"]="application/json";if(tok)h.Authorization="Bearer "+tok;
+  const r=await fetch(API,{method:body?"POST":"GET",headers:h,body:body?JSON.stringify(body):undefined,cache:"no-store"});
+  let d={};try{d=await r.json()}catch(e){}
+  return{ok:r.ok,status:r.status,d}}
+// Fetch the latest tournaments. Skipped while an admin change is still being saved, so it can't be overwritten.
+async function load(){
+  if(dirty&&!busy&&authed)flush();
+  const was=[ready,need,offline,rev].join();
+  try{const r=await api();if(!r.ok||!Array.isArray(r.d.T))throw 0;
+    ready=true;offline=false;need=!!r.d.need;
+    if(!busy&&!dirty&&r.d.rev!==rev){S=clean({T:r.d.T});rev=r.d.rev;cache()}}
+  catch(e){offline=true}
+  if([ready,need,offline,rev].join()!==was){const a=document.activeElement;if(!(authed&&a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))render(true)}}
+// save() is called after every admin change: the screen updates at once, the server write follows in the background.
+function save(){cache();dirty=true;flush()}
+async function flush(){
+  if(busy)return;busy=true;let show=false;
+  try{while(dirty){dirty=false;
+    const r=await api({action:"save",T:S.T,rev});
+    if(r.ok){rev=r.d.rev;cache();if(err.startsWith("Could not save")){err="";show=true}}
+    else if(r.status===401){dropAuth();err="Your admin session ended, so the last change was not saved. Log in again.";reload=show=true;break}
+    else if(r.status===409){S=clean({T:r.d.T});rev=r.d.rev;cache();err="Another device saved changes first, so your last change was not saved. The latest version is shown.";show=true;break}
+    else throw 0}}
+  catch(e){dirty=true;err="Could not save to the server. Your last change is not saved yet. It retries automatically.";show=true}
+  busy=false;if(show)render(true);if(reload){reload=false;rev=-1;load()}}
+function dropAuth(){authed=false;showForm=false;tok="";try{sessionStorage.removeItem("hhTok");sessionStorage.removeItem("hhAuth")}catch(e){}}
 const get=id=>S.T.find(t=>t.id===id);
 
 // ---------- Bracket logic (team formats) ----------
@@ -90,9 +115,10 @@ const fmtOf=t=>t.type==="ffa"?"Free for all · "+t.pl.length+" players":t.og?esc
 const pill=t=>fin(t)?'<span class="pill gold">Finished</span>':'<span class="pill in">In progress</span>';
 
 // ---------- Views ----------
+const LOAD='<div class="card"><p>Loading tournaments…</p></div>';
 const topbar=()=>`<header class="top"><div class="brand"><img src="logo-256.png" alt=""><span>HeyHoney Tournaments</span></div><nav class="seg" aria-label="Main"><a href="#/" class="${location.hash==="#/admin"?"":"on"}" ${location.hash==="#/admin"?"":'aria-current="page"'}>Dashboard</a><a href="#/admin" class="${location.hash==="#/admin"?"on":""}" ${location.hash==="#/admin"?'aria-current="page"':""}>Admin</a>${authed?'<button onclick="logout()">Log out</button>':""}</nav></header>`;
 
-const login=()=>{const su=!S.hash&&S.pass==null;
+const login=()=>{if(!ready)return`<div class="card login"><p>${offline?"Can’t reach the server. Check your connection and reload.":"Loading…"}</p></div>`;const su=need;
   return`<form class="card login" onsubmit="doLogin();return false"><h2 class="flush">${su?"Create admin passcode":"Admin login"}</h2>${su?'<p class="meta">First time here. Choose a passcode of at least 8 characters.</p>':""}<label for="pw">Passcode</label><input id="pw" type="password" autocomplete="${su?"new-password":"current-password"}"><div class="err" id="le" role="alert"></div><p class="acts"><button class="gold" type="submit">${su?"Save and log in":"Log in"}</button></p></form>`};
 
 function card(t){const[d,n]=prog(t);let lead;
@@ -166,8 +192,8 @@ function render(keepInputs){
   if(authed){try{if(!(+sessionStorage.getItem("hhAuth")>Date.now()))authed=false}catch(e){}}
   const keep={},sl=[...app.querySelectorAll(".bwrap")].map(x=>x.scrollLeft);
   if(keepInputs===true)app.querySelectorAll("input[id],textarea[id],select[id]").forEach(x=>{if(x.type!=="file")keep[x.id]=x.value});
-  const body=location.hash==="#/admin"?(authed?admin():login()):m?(t?tview(t):'<div class="card"><p>Tournament not found. It may have been deleted, or it lives in another browser.</p><p><a class="linkb" href="#/">Back to dashboard</a></p></div>'):dash();
-  app.innerHTML=topbar()+`<main id="main">${err?`<div class="err" role="alert">${esc(err)}</div>`:""}${note?`<div class="note" role="status">${esc(note)}</div>`:""}${body}</main>`;
+  const body=location.hash==="#/admin"?(authed?admin():login()):m?(t?tview(t):!ready&&!offline?LOAD:'<div class="card"><p>Tournament not found. It may have been deleted.</p><p><a class="linkb" href="#/">Back to dashboard</a></p></div>'):!ready&&!offline&&!S.T.length?LOAD:dash();
+  app.innerHTML=topbar()+`<main id="main">${offline?'<div class="note" role="status">Can’t reach the server right now. Showing the last copy loaded on this device.</div>':""}${err?`<div class="err" role="alert">${esc(err)}</div>`:""}${note?`<div class="note" role="status">${esc(note)}</div>`:""}${body}</main>`;
   document.title=(t?t.name+" · ":location.hash==="#/admin"?"Admin · ":"")+"HeyHoney Tournaments";
   Object.keys(keep).forEach(id=>{const n=document.getElementById(id);if(n)n.value=keep[id]});
   app.querySelectorAll("[data-w]").forEach(x=>{x.style.width=x.dataset.w+"%"});
@@ -178,17 +204,16 @@ function render(keepInputs){
 
 // ---------- Actions ----------
 async function doLogin(){
-  const le=document.getElementById("le"),p=v("pw"),su=!S.hash&&S.pass==null;
-  if(Date.now()<lockUntil)return void(le.textContent="Too many attempts. Wait "+Math.ceil((lockUntil-Date.now())/1000)+"s.");
-  if(!(window.crypto&&crypto.subtle))return void(le.textContent="Admin login needs a secure (HTTPS) connection.");
-  if(su){if(p.length<8)return void(le.textContent="Use at least 8 characters.");await setPass(p)}
-  else{
-    const ok=S.pass!=null?p===S.pass:await hashPass(p,S.salt)===S.hash;
-    if(!ok){if(++fails>=5){lockUntil=Date.now()+3e4;fails=0}return void(le.textContent="Wrong passcode. Check it and try again.")}
-    if(S.pass!=null)await setPass(p)} // upgrade legacy plaintext passcode to a salted hash
-  fails=0;authed=true;try{sessionStorage.setItem("hhAuth",Date.now()+SESSION_MS)}catch(e){}
+  const le=document.getElementById("le"),p=v("pw"),bt=document.querySelector(".login button[type=submit]");
+  if(need&&p.length<8)return void(le.textContent="Use at least 8 characters.");
+  le.textContent="";if(bt)bt.disabled=true;
+  let r;try{r=await api({action:need?"setup":"login",pass:p})}catch(e){if(bt)bt.disabled=false;return void(le.textContent="Can’t reach the server. Check your connection and try again.")}
+  if(!r.ok){if(bt)bt.disabled=false;if(r.d.need)need=true;return void(le.textContent=r.d.error||"Something went wrong. Try again.")}
+  tok=r.d.token;authed=true;need=false;try{sessionStorage.setItem("hhTok",tok);sessionStorage.setItem("hhAuth",Date.now()+SESSION_MS)}catch(e){}
+  await load();
+  if(!S.T.length&&legacy.length){S.T=legacy.slice(0,MAX);legacy=[];note="Moved "+S.T.length+" tournament(s) from this browser to the shared database.";save()}
   location.hash==="#/admin"?render():location.hash="#/admin"}
-function logout(){authed=false;showForm=false;try{sessionStorage.removeItem("hhAuth")}catch(e){}render()}
+function logout(){api({action:"logout"}).catch(()=>{});dropAuth();render()}
 
 function createT(){const e=m=>{document.getElementById("fe").textContent=m},nm=v("nn").trim(),ty=v("nt"),f=ty==="ffa"?"ffa":ty==="team"?"2":"1",L=ty==="team"?[]:v("nl").split("\n").map(x=>x.trim()).filter(Boolean).map(tt),id=uid();let t;
   if(S.T.length>=MAX)return e("The board is full. Delete a tournament first.");
@@ -455,7 +480,10 @@ function saveSlots(id){const t=get(id);err=note="";
 // ---------- Admin actions ----------
 const fail=m=>{err=m;render(true)};
 function rename(id){const n=v("rn").trim();err=note="";if(!n)return fail("Enter a tournament name.");get(id).name=n;note="Name saved.";save();render()}
-async function savePass(){const p=v("np");err=note="";if(p.length<8)return fail("Use a passcode of at least 8 characters.");await setPass(p);note="Passcode updated.";render()}
+async function savePass(){const p=v("np");err=note="";if(p.length<8)return fail("Use a passcode of at least 8 characters.");
+  let r;try{r=await api({action:"passwd",pass:p})}catch(e){return fail("Can’t reach the server. Try again.")}
+  if(!r.ok)return fail(r.d.error||"Could not update the passcode.");
+  tok=r.d.token;try{sessionStorage.setItem("hhTok",tok)}catch(e){}note="Passcode updated. Other devices are logged out.";render()}
 function saveTime(id,k){const t=get(id),x=v("d"+k);if(x)mtOf(t)[k]=x;else delete mtOf(t)[k];err="";note="Time saved.";save();render()}
 function toggleLive(id,k){const t=get(id);lvOf(t)[k]=!lvOf(t)[k];err=note="";save();render()}
 function addPl(id){const t=get(id),n=tt(v("np1").trim());err=note="";
@@ -473,7 +501,7 @@ function saveTeam(id,i){const t=get(id),n=v("tn"+i).trim(),m=v("tm"+i).split(","
   if(m.length>t.size)return fail("Members are limited to "+t.size+" for this format.");
   t.teams[i]={n,m};note="Saved "+dn(n)+".";save();render()}
 
-const backup=()=>`<div class="card"><h3 class="sec">Backup</h3><p class="meta">Tournament data is stored in this browser only. Export a copy to keep it safe or move it to another device.</p><p class="acts"><button onclick="exportData()">Export JSON</button><button onclick="document.getElementById('imp').click()">Import JSON</button><input id="imp" type="file" accept=".json,application/json" hidden onchange="importData(this.files[0])"></p></div>`;
+const backup=()=>`<div class="card"><h3 class="sec">Backup</h3><p class="meta">Tournaments are saved to the shared database, so every device sees the same data. Export a copy for your own backup.</p><p class="acts"><button onclick="exportData()">Export JSON</button><button onclick="document.getElementById('imp').click()">Import JSON</button><input id="imp" type="file" accept=".json,application/json" hidden onchange="importData(this.files[0])"></p></div>`;
 function exportData(){const b=new Blob([JSON.stringify({v:8,T:S.T},null,2)],{type:"application/json"}),a=document.createElement("a");
   a.href=URL.createObjectURL(b);a.download="heyhoney-tournaments-"+new Date().toISOString().slice(0,10)+".json";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1e3)}
 async function importData(f){if(!f)return;err=note="";
@@ -503,8 +531,10 @@ document.addEventListener("click",e=>{if(cm&&!cm.contains(e.target))closeCm()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeCm()});
 window.addEventListener("scroll",closeCm,true);window.addEventListener("resize",closeCm);
 
-// Keep other open tabs in sync, and hide a missing logo instead of showing a broken image.
-window.addEventListener("storage",e=>{if(e.key===KEY&&e.newValue){try{S=clean(JSON.parse(e.newValue));render(true)}catch(_){}}});
+// Hide a missing logo instead of showing a broken image.
 app.addEventListener("error",e=>{if(e.target.tagName==="IMG")e.target.hidden=true},true);
 window.addEventListener("hashchange",()=>{err=note="";nav=true;render()});render();
+// Load the shared data now, then check for changes every 15 seconds while the tab is visible.
+load();setInterval(()=>{if(!document.hidden)load()},15000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)load()});
 document.addEventListener("error",e=>{const t=e.target;if(t&&t.classList&&t.classList.contains("pfp")){if(t.classList.contains("champ-img")||t.classList.contains("mcimg")){const d=document.createElement("div");d.className=t.classList.contains("mcimg")?"mca":"champ-av";d.textContent=t.dataset.i;t.replaceWith(d)}else t.remove()}},true);

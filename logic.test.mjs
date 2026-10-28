@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { draw, win, clear, champ, board, clean, okNum, MAX } from "./logic.js";
+import { draw, win, clear, champ, board, clean, okNum, MAX } from "./logic.mjs";
 
 const mk = n => {
   const t = { id: "t1", name: "T", type: "team", size: 1, teams: Array.from({ length: n }, (_, i) => ({ n: "P" + i, m: [], o: 0 })) };

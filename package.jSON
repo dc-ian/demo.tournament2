@@ -1,1 +1,1 @@
-{"type":"module","scripts":{"test":"node --test"}}
+{"private":true,"name":"heyhoney-tournaments","type":"commonjs","scripts":{"test":"node --test"}}

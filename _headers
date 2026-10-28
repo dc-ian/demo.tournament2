@@ -1,4 +1,0 @@
-# Netlify / Cloudflare Pages. Sets the CSP as an HTTP header, so scripts a host or dev server injects
-# are handled by the platform rather than blocked in the page. Add the backend origin to connect-src later.
-/*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'
