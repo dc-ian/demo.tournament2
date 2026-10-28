@@ -537,4 +537,4 @@ window.addEventListener("hashchange",()=>{err=note="";nav=true;render()});render
 // Load the shared data now, then check for changes every 15 seconds while the tab is visible.
 load();setInterval(()=>{if(!document.hidden)load()},15000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)load()});
-document.addEventListener("error",e=>{const t=e.target;if(t&&t.classList&&t.classList.contains("pfp")){if(t.classList.contains("champ-img")||t.classList.contains("mcimg")){const d=document.createElement("div");d.className=t.classList.contains("mcimg")?"mca":"champ-av";d.textContent=t.dataset.i;t.replaceWith(d)}else t.remove()}},true);
+document.addEventListener("error",e=>{const t=e.target;if(t&&t.classList&&t.classList.contains("pfp")){const n=+t.dataset.r||0;if(n<3){t.dataset.s=t.dataset.s||t.src;t.dataset.r=n+1;setTimeout(()=>{if(t.isConnected)t.src=t.dataset.s+"?r="+(n+1)},2000*(n+1)+Math.random()*3000);return}if(t.classList.contains("champ-img")||t.classList.contains("mcimg")){const d=document.createElement("div");d.className=t.classList.contains("mcimg")?"mca":"champ-av";d.textContent=t.dataset.i;t.replaceWith(d)}else t.remove()}},true);
